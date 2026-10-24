@@ -1,0 +1,27 @@
+{
+ "id": "digipools",
+ "version": "1.0",
+ "license": "GPL-2.0-or-later",
+ "title": "DigiPools",
+ "category": "Sampling",
+ "author": "irpina & community",
+ "description": "A new SRC machine, DIGIPOOLS: use Chromatic mode to play different samples from the project's RAM sample pool (1..127). In Chromatic mode on the SRC page, keep any trig key pressed and turn encoder D (SAMP) to select what sample that key plays. Live recording and step recording store the sample locks seamlessly.",
+ "device": "digitakt-mk1",
+ "os": "1.54",
+ "sources": ["glue.s", "pool.c"],
+ "cflags": ["-Os"],
+ "sites": [
+  {"addr": "0x400d5766", "stock": "723fb2b94020c64c", "op": "jsr", "target": "dpl_kbnote"},
+  {"addr": "0x40008d40", "stock": "4eb94001c10a", "op": "keep2", "target": "dpl_kbrec"},
+  {"addr": "0x40008904", "stock": "4eb940024942", "op": "keep2", "target": "dpl_kbstep"}
+ ],
+ "subscribe": [
+  {"event": "ev_key", "fn": "dpl_key", "order": 50},
+  {"event": "ev_enc", "fn": "dpl_enc", "order": 50},
+  {"event": "ev_draw", "fn": "dpl_draw", "order": 90},
+  {"event": "ev_tick", "fn": "dpl_tick", "order": 50}
+ ],
+ "machines": [{"id": 10, "descriptor": "dpl_machine", "order": 50}],
+ "requires": ["core", "machine-pages"],
+ "resources": {"core": "3.0", "names": ["machine:10"]}
+}

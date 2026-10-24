@@ -1,0 +1,11 @@
+# Generated build artifacts & patched firmware binaries
+out/
+*.syx
+*.syx.json
+*.syx.map.json
+*.work
+*.o
+
+# OS metadata
+.DS_Store
+Thumbs.db

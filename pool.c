@@ -178,6 +178,18 @@ static const char *dpl_sample_name(s32 slot)
     return s;
 }
 
+/* Helper: Display the sample select toast message on the Digitakt screen */
+static void dpl_show_sample_msg(s32 trig, s32 slot)
+{
+    u32 s = *(const volatile u32 *)0x421fab88u;
+    if (s >= 0x40000000u && s < 0x48000000u) {
+        typedef void (*post_fn)(void *seq, const char *fmt, ...);
+        const char *name = dpl_sample_name(slot);
+        s32 k = trig + 1;
+        ((post_fn)OS_POST_MSG)((void *)s, "KEY %d: %d %.14s", k, slot, name);
+    }
+}
+
 /* Initialize default sample mapping for track t (key k -> sample k+1) */
 static void dpl_init_track(s32 t)
 {
@@ -441,6 +453,10 @@ s32 dpl_key(void *brain, void *ev)
         if (fl & 1) {                           /* Key pressed */
             held_keys_mask |= (1u << k);
             held_trig = k;
+            if (is_key_selection_active()) {
+                s32 slot = (s32)dpl_get_trig_sample((s32)fw_active_track, k);
+                dpl_show_sample_msg(k, slot);
+            }
         } else {                                /* Key released */
             held_keys_mask &= ~(1u << k);
             if (held_trig == k) {
@@ -449,6 +465,10 @@ s32 dpl_key(void *brain, void *ev)
                 for (s32 i = 0; i < 16; i++) {
                     if (held_keys_mask & (1u << i)) {
                         held_trig = i;
+                        if (is_key_selection_active()) {
+                            s32 slot = (s32)dpl_get_trig_sample((s32)fw_active_track, i);
+                            dpl_show_sample_msg(i, slot);
+                        }
                         break;
                     }
                 }
@@ -473,6 +493,7 @@ s32 dpl_enc(void *brain, void *ev)
             s32 step = enc_acc / ENC_COUNTS;
             enc_acc -= step * ENC_COUNTS;
             if (!step) {
+                dpl_show_sample_msg(held_trig, (s32)dpl_get_trig_sample(track, held_trig));
                 return 1;
             }
 
@@ -494,6 +515,9 @@ s32 dpl_enc(void *brain, void *ev)
                 dpl_note_sample[track][held_note] = (u8)cur;
                 last_sample_played[track][held_note] = (u8)cur;
             }
+
+            /* Display sample select toast message: KEY <k>: <slot> <Name> */
+            dpl_show_sample_msg(held_trig, cur);
 
             return 1;                           /* Consumed: do not modify track's base SAMP */
         }

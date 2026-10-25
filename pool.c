@@ -112,11 +112,12 @@ static s32 is_chromatic_on(void)
 /* Helper: Check if step editing (grid record mode) is active */
 static s32 is_step_edit_on(void)
 {
-    fn0_t get_seq = (fn0_t)OS_SEQ_GET;
-    fn1_t is_rec = (fn1_t)OS_IS_REC;
-    u32 seq = get_seq();
-    if (!seq) return 0;
-    return (is_rec(seq) & 0xff) != 0;
+    u32 s = *(const volatile u32 *)0x421fab88u;
+    const u8 *seq;
+    if (s < 0x40000000u || s >= 0x48000000u)
+        return 0;
+    seq = (const u8 *)s;
+    return (seq[353] != 0 && seq[360] != 0);
 }
 
 /* Helper: Get sound data for track t if it is on DIGIPOOLS machine */
@@ -138,26 +139,33 @@ static s32 is_digipools_active(void)
     return dpl_sound((s32)fw_active_track) != 0;
 }
 
+static u8 func_held = 0;
+
 /* Helper: Key selection for DigiPools is ONLY active when:
  * 1. Chromatic mode is ON
  * 2. Step edit / grid record mode is OFF
- * 3. Active track is DigiPools
+ * 3. FUNC is NOT held (FUNC + Trig is reserved for track muting)
+ * 4. Active track is DigiPools
  */
 static s32 is_key_selection_active(void)
 {
-    return is_chromatic_on() && !is_step_edit_on() && is_digipools_active();
+    return is_chromatic_on() && !is_step_edit_on() && !func_held && is_digipools_active();
 }
 
-/* Helper: Resolve sample name from the project RAM sample pool */
+/* Helper: Resolve sample name from the project RAM sample pool safely */
 static const char *dpl_sample_name(s32 slot)
 {
-    const char *name;
+    u32 ptr;
+    const char *s;
     if (slot <= 0 || slot > 127)
         return "OFF";
-    name = ((const char *(*)(s32))OS_SMP_NAME)(slot);
-    if (name && name[0])
-        return name;
-    return "---";
+    ptr = *(const volatile u32 *)(0x421f498cu + (u32)slot * 4u);
+    if (ptr < 0x40000000u || ptr >= 0x48000000u)
+        return "---";
+    s = (const char *)ptr;
+    if (s[0] == 0)
+        return "---";
+    return s;
 }
 
 /* Initialize default sample mapping for track t (key k -> sample k+1) */
@@ -284,6 +292,7 @@ void dpl_kb_noteon(s32 track, s32 note, u8 *fp, u32 audio_a, u32 audio_b)
      * with the selected octave transposition.
      */
     l = (u8 *)LOCKLIST();
+    if (!l) return;                             /* Safety check against NULL pool exhaust */
     *(s32 *)(l + 8) = 1;                        /* 1 parameter lock: SAMP */
     *(u16 *)(l + 0x14) = P_SAMP;                /* Lock 0: slot 20 (SAMP) */
     *(s16 *)(l + 0x16) = (s16)(samp << 8);
@@ -357,6 +366,27 @@ s32 dpl_key(void *brain, void *ev)
     s32 fl = *(const s32 *)((const u8 *)ev + 16);
     (void)brain;
 
+    /* Handle FUNC key (KEY_FUNC = 1, fl & 2 means FUNC is held) */
+    if (key == 1) {
+        func_held = (fl & 1) ? 1 : 0;
+        if (func_held) {
+            held_trig = -1;
+            held_keys_mask = 0;
+            ui_need_redraw = 1;
+        }
+        return 0;
+    }
+
+    if (fl & 2) {
+        func_held = 1;
+        held_trig = -1;
+        held_keys_mask = 0;
+        ui_need_redraw = 1;
+        return 0;                               /* Allow FUNC+key mute/actions to pass through */
+    } else {
+        func_held = 0;
+    }
+
     /* [YES] auditions/previews the currently selected sample */
     if (key == K_YES && (fl & 1)) {
         if (held_trig >= 0 && is_key_selection_active()) {
@@ -424,9 +454,6 @@ s32 dpl_enc(void *brain, void *ev)
                 dpl_note_sample[track][held_note] = (u8)cur;
                 last_sample_played[track][held_note] = (u8)cur;
             }
-
-            /* Preview/audition the newly selected sample */
-            dpl_preview(track, cur);
 
             ui_need_redraw = 1;
             return 1;                           /* Consumed: do not modify track's base SAMP */
@@ -519,7 +546,9 @@ static int32_t pool_samp_fmt(char *buf, int32_t value, int32_t ctx, int32_t mach
             *p++ = (char)('0' + (slot % 10));
             *p++ = ' ';
             while (*name && p < buf + 15) {
-                *p++ = *name++;
+                char c = *name++;
+                if (c >= 32 && c < 127)
+                    *p++ = c;
             }
             *p = 0;
             return 1;

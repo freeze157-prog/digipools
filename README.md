@@ -19,20 +19,22 @@
 - **Chromatic Mode Multi-Sample Playback**
   - In Chromatic mode (`KEYBOARD` / `FUNC + TRK`), each trig key (or chromatic note) triggers a different sample from the RAM sample pool.
   - Natural octave pitch is preserved when shifting octaves UP/DOWN.
-- **Instant Key-to-Sample Selection with Live Preview & Name Display**
+- **Instant Key-to-Sample Selection with Name Display & Preview**
   - To assign which key plays which sample:
     1. Enter **Chromatic mode** (`FUNC + TRK`).
     2. Ensure you are **not** in step editing / grid record mode (`[REC]` is off).
     3. Open the **SRC** page.
-    4. **Hold down any trig key** (1-16).
+    4. **Hold down any trig key** (1-16) *(without holding FUNC)*.
     5. Turn **Encoder D (SAMP)** to select the desired sample from the pool.
-    6. Release the key.
-  - **Live Preview & Sample Names**:
-    - As you turn Encoder D, the selected sample is **automatically auditioned/previewed** in real-time.
-    - You can also press `[YES]` while holding the trig key to re-audition the sample.
+    6. Press **`[YES]`** while holding the trig key to audition/preview the selected sample.
+    7. Release the key.
+  - **Sample Name Display**:
     - The top OLED banner displays: `KEY <key>: <slot> <Sample Name>` (e.g., `KEY 1: 4 808 CLAP`).
     - Knob D pop-up shows `K<key>:<slot> <Sample Name>`.
-  - When in step editing / grid recording mode (`[REC]` active), turning Encoder D functions normally to parameter-lock steps without altering the chromatic key assignments.
+  - **Mute Protection (`FUNC + Trig`)**:
+    - `FUNC + Trig` is strictly reserved for muting/unmuting tracks and will never trigger sample selection or popups.
+  - **Step Edit Protection**:
+    - When in step editing / grid recording mode (`[REC]` active), turning Encoder D functions normally to parameter-lock steps without altering chromatic key assignments.
 - **Sequencer Integration (Live & Step Recording)**
   - When recording live (`REC + PLAY`) or using Step Recording (`FUNC + Trig` in grid mode), trigs are automatically recorded with a parameter lock on `SAMP` corresponding to the exact sample played, preserving the recorded pitch and octave tuning across sequencer steps.
   - Sequenced patterns play back identically whether played live or triggered by the sequencer.

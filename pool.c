@@ -269,6 +269,26 @@ static s32 kb_was_recorded(const u8 *msg, s32 track, s32 note)
         && dpl_sound(track) != 0;
 }
 
+/* Preview / audition state */
+static s32 preview_sample = 0;
+
+static void dpl_preview(s32 track, s32 samp)
+{
+    typedef void (*noteon_fn)(s32 trk, s32 note, s32 vel, s32 src, s32 dur, s32 l1, s32 l2);
+    typedef void (*noteoff_fn)(s32 trk, s32 note, s32 src);
+    noteon_fn note_on = (noteon_fn)OS_NOTEON;
+    noteoff_fn note_off = (noteoff_fn)OS_NOTEOFF;
+
+    if (samp <= 0 || samp > 127 || track < 0 || track >= TRACKS) return;
+
+    /* Cleanly stop any previous preview voice on this track before triggering the new one */
+    note_off(track, 60, SRC_KEYS);
+
+    preview_sample = samp;
+    note_on(track, 60, 100, SRC_KEYS, 0, -1, -1);
+    preview_sample = 0;
+}
+
 /* ---- NOTEON Intercept (called from glue.s dpl_kbnote) ---------------------------- */
 void dpl_kb_noteon(s32 track, s32 note, u8 *fp, u32 audio_a, u32 audio_b)
 {
@@ -276,12 +296,14 @@ void dpl_kb_noteon(s32 track, s32 note, u8 *fp, u32 audio_a, u32 audio_b)
     s32 key;
     const u8 *snd;
     s32 samp;
+    s32 is_preview = (preview_sample > 0);
 
     if (*(s32 *)(fp + 20) != SRC_KEYS || note < 0 || note > 127 || track < 0 || track >= TRACKS)
         return;
 
-    key = (*(u32 *)(fp + 4) == KB_CALL);
-    kb_note_track(track, note, key);
+    key = (*(u32 *)(fp + 4) == KB_CALL) || is_preview;
+    if (!is_preview)
+        kb_note_track(track, note, key);
 
     if (!key || PREVIEW <= 63 || *(u32 *)(fp - 8) || !((audio_a | audio_b) & 0xff))
         return;
@@ -290,22 +312,26 @@ void dpl_kb_noteon(s32 track, s32 note, u8 *fp, u32 audio_a, u32 audio_b)
     if (!snd)
         return;
 
-    if (!is_chromatic_on())
+    if (!is_preview && !is_chromatic_on())
         return;
 
-    /* Remember current held note */
-    held_note = note;
+    if (is_preview) {
+        samp = preview_sample;
+    } else {
+        /* Remember current held note */
+        held_note = note;
 
-    /* Look up sample for this trig / note */
-    if (held_trig >= 0 && held_trig < 16)
-        samp = dpl_get_trig_sample(track, held_trig);
-    else
-        samp = dpl_get_note_sample(track, note);
+        /* Look up sample for this trig / note */
+        if (held_trig >= 0 && held_trig < 16)
+            samp = dpl_get_trig_sample(track, held_trig);
+        else
+            samp = dpl_get_note_sample(track, note);
 
-    if (samp <= 0) samp = 1;
+        if (samp <= 0) samp = 1;
 
-    /* Remember exact sample played for this note so recording uses the identical sample */
-    last_sample_played[track][note] = (u8)samp;
+        /* Remember exact sample played for this note so recording uses the identical sample */
+        last_sample_played[track][note] = (u8)samp;
+    }
 
     if (samp <= 0) samp = 1;
 
@@ -440,6 +466,7 @@ s32 dpl_key(void *brain, void *ev)
             held_keys_mask &= ~(1u << k);
             if (held_trig == k) {
                 held_trig = -1;
+                ((void (*)(s32, s32, s32))OS_NOTEOFF)((s32)fw_active_track, 60, SRC_KEYS);
                 /* If another key remains held, switch focus to it */
                 for (s32 i = 0; i < 16; i++) {
                     if (held_keys_mask & (1u << i)) {
@@ -497,6 +524,9 @@ s32 dpl_enc(void *brain, void *ev)
 
             /* Display sample select toast message: KEY <k>: <slot> <Name> */
             dpl_show_sample_msg(held_trig, cur);
+
+            /* Autopreview the newly selected sample */
+            dpl_preview(track, cur);
 
             return 1;                           /* Consumed: do not modify track's base SAMP */
         }

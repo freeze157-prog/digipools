@@ -205,13 +205,21 @@ static void dpl_init_track(s32 t)
     }
     dpl_inited[t] = 1;
 
-    /* Fallback: if kit is loaded and sound has PLAY set to REV (1), set to FWD (0) */
+    /* Fallback: ensure sound has ONESHOT defaults for PLAY, TUNE and LEV */
     if (fw_kit) {
         u8 *snd = FW_SOUND(fw_kit, t);
         if (snd && snd[S_MACHINE] == DIGIPOOLS_MACHINE) {
-            if (*(s16 *)(snd + 0x38) == (s16)(1 << 8)) {
-                *(s16 *)(snd + 0x38) = 0;
-                fw_set_param(0, t, 18);
+            if (*(s16 *)(snd + 0x38) == 0) {
+                *(s16 *)(snd + 0x38) = (s16)0x0300;     /* FWD (768) */
+                fw_set_param(0x0300, t, 18);
+            }
+            if (*(s16 *)(snd + 0x36) == 0) {
+                *(s16 *)(snd + 0x36) = (s16)0x4000;     /* 0.00 semitones (16384) */
+                fw_set_param(0x4000, t, 17);
+            }
+            if (*(s16 *)(snd + 0x44) == 0) {
+                *(s16 *)(snd + 0x44) = (s16)(100 << 8); /* Level 100 (25600) */
+                fw_set_param(100 << 8, t, 24);
             }
         }
     }
@@ -555,8 +563,8 @@ static void dpl_on_switch(int32_t track, int32_t from, uint8_t *sound)
     if (!sound || track < 0 || track >= TRACKS) return;
 
     /* Initialize all SRC machine parameters to stock ONESHOT defaults */
-    *(s16 *)(sound + 0x36) = 0;                  /* TUNE  = 0 (0 semitones) */
-    *(s16 *)(sound + 0x38) = 0;                  /* PLAY  = 0 (FWD) */
+    *(s16 *)(sound + 0x36) = (s16)0x4000;         /* TUNE  = 0.00 semitones (center = 16384) */
+    *(s16 *)(sound + 0x38) = (s16)0x0300;         /* PLAY  = FWD (768) */
     *(s16 *)(sound + 0x3a) = 0;                  /* BIT   = 0 */
 
     /* If SAMP is not already set to a valid slot (1..127), default to 1 */
@@ -568,19 +576,19 @@ static void dpl_on_switch(int32_t track, int32_t from, uint8_t *sound)
     }
 
     *(s16 *)(sound + 0x3e) = 0;                  /* START = 0 */
-    *(s16 *)(sound + 0x40) = (s16)(120 << 8);    /* LEN   = 120 (max length) */
+    *(s16 *)(sound + 0x40) = (s16)(120 << 8);    /* LEN   = 120 (max length = 30720) */
     *(s16 *)(sound + 0x42) = 0;                  /* LOOP  = 0 */
-    *(s16 *)(sound + 0x44) = 0;                  /* BR    = 0 */
+    *(s16 *)(sound + 0x44) = (s16)(100 << 8);    /* LEV   = 100 (level = 25600) */
 
     /* Push parameters to the sound engine */
-    fw_set_param(0, track, 17);                  /* TUNE */
-    fw_set_param(0, track, 18);                  /* PLAY (FWD) */
+    fw_set_param(0x4000, track, 17);             /* TUNE (0.00) */
+    fw_set_param(0x0300, track, 18);             /* PLAY (FWD) */
     fw_set_param(0, track, 19);                  /* BIT */
     fw_set_param((s32)(slot << 8), track, 20);   /* SAMP */
     fw_set_param(0, track, 21);                  /* START */
     fw_set_param(120 << 8, track, 22);           /* LEN */
     fw_set_param(0, track, 23);                  /* LOOP */
-    fw_set_param(0, track, 24);                  /* BR */
+    fw_set_param(100 << 8, track, 24);           /* LEV */
 
     /* Reset track sample mapping */
     dpl_inited[track] = 0;
@@ -652,12 +660,24 @@ static const struct cm_ui dpl_page = {
     .page_from = 0,                             /* ONESHOT's SRC page */
     .on_switch = dpl_on_switch,
     .knob = {
+        [0] = {                                 /* Knob A: TUNE */
+            .flags = CM_DEFAULT,
+            .def = 0x4000,                      /* 16384 = 0.00 semitones */
+        },
         [1] = {                                 /* Knob B: PLAY */
             .flags = CM_DEFAULT,
-            .def = 0,                           /* 0 = FWD */
+            .def = 0x0300,                      /* 768 = FWD */
         },
         [3] = {                                 /* Knob D: SAMP */
             .fmt = pool_samp_fmt,
+        },
+        [5] = {                                 /* Knob F: LEN */
+            .flags = CM_DEFAULT,
+            .def = 0x7800,                      /* 120 * 256 = 120 */
+        },
+        [7] = {                                 /* Knob H: LEV */
+            .flags = CM_DEFAULT,
+            .def = 0x6400,                      /* 100 * 256 = 100 */
         },
     },
 };

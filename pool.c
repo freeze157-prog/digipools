@@ -98,8 +98,9 @@ static u16 held_keys_mask = 0;
 static u8  ui_need_redraw = 0;
 static u32 kb_notes[TRACKS][4];                 /* 128 bits: covers notes 0..127 */
 
-#define ENC_COUNTS 4                            /* Encoder quadrature counts per detent */
+#define ENC_COUNTS 12                           /* Encoder counts per sample (3x slower for precise selection) */
 static s32 enc_acc = 0;
+static u8  src_tab_active = 1;                  /* 1 when SRC page is active, 0 for TRIG/FLTR/AMP/LFO */
 
 /* Helper: Check if keyboard/chromatic mode is active */
 static s32 is_chromatic_on(void)
@@ -112,15 +113,19 @@ static s32 is_chromatic_on(void)
     return (KB_ON(ts) & 0xff) != 0;
 }
 
-/* Helper: Check if step editing (grid record mode) is active */
-static s32 is_step_edit_on(void)
+/* Helper: Check if record mode (grid edit or live record) is active */
+static s32 is_record_or_step_edit(void)
 {
     u32 s = *(const volatile u32 *)0x421fab88u;
     const u8 *seq;
     if (s < 0x40000000u || s >= 0x48000000u)
         return 0;
     seq = (const u8 *)s;
-    return (seq[353] != 0 && seq[360] != 0);
+    if (seq[360] != 0 || seq[362] != 0)
+        return 1;
+    if (*(const volatile u8 *)0x4208d680u != 0)
+        return 1;
+    return 0;
 }
 
 /* Helper: Get sound data for track t if it is on DIGIPOOLS machine */
@@ -146,13 +151,15 @@ static u8 func_held = 0;
 
 /* Helper: Key selection for DigiPools is ONLY active when:
  * 1. Chromatic mode is ON
- * 2. Step edit / grid record mode is OFF
+ * 2. Record / step edit mode is OFF
  * 3. FUNC is NOT held (FUNC + Trig is reserved for track muting)
  * 4. Active track is DigiPools
+ * 5. SRC page/tab is currently active
  */
 static s32 is_key_selection_active(void)
 {
-    return is_chromatic_on() && !is_step_edit_on() && !func_held && is_digipools_active();
+    return is_chromatic_on() && !is_record_or_step_edit() && !func_held
+        && is_digipools_active() && src_tab_active;
 }
 
 /* Helper: Resolve sample name from the project RAM sample pool safely */
@@ -380,6 +387,17 @@ s32 dpl_key(void *brain, void *ev)
     s32 fl = *(const s32 *)((const u8 *)ev + 16);
     (void)brain;
 
+    /* Track parameter page buttons: 19 TRIG, 20 SRC, 21 FLTR, 22 AMP, 23 LFO */
+    if (key == 20 && (fl & 1)) {
+        src_tab_active = 1;
+    } else if ((key == 19 || key == 21 || key == 22 || key == 23) && (fl & 1)) {
+        src_tab_active = 0;
+        held_trig = -1;
+        held_keys_mask = 0;
+        enc_acc = 0;
+        return 0;
+    }
+
     /* Handle FUNC key (KEY_FUNC = 1, fl & 2 means FUNC is held) */
     if (key == 1) {
         func_held = (fl & 1) ? 1 : 0;
@@ -387,7 +405,6 @@ s32 dpl_key(void *brain, void *ev)
             held_trig = -1;
             held_keys_mask = 0;
             enc_acc = 0;
-            ui_need_redraw = 1;
         }
         return 0;
     }
@@ -397,7 +414,6 @@ s32 dpl_key(void *brain, void *ev)
         held_trig = -1;
         held_keys_mask = 0;
         enc_acc = 0;
-        ui_need_redraw = 1;
         return 0;                               /* Allow FUNC+key mute/actions to pass through */
     } else {
         func_held = 0;
@@ -425,7 +441,6 @@ s32 dpl_key(void *brain, void *ev)
         if (fl & 1) {                           /* Key pressed */
             held_keys_mask |= (1u << k);
             held_trig = k;
-            ui_need_redraw = 1;
         } else {                                /* Key released */
             held_keys_mask &= ~(1u << k);
             if (held_trig == k) {
@@ -438,7 +453,6 @@ s32 dpl_key(void *brain, void *ev)
                     }
                 }
             }
-            ui_need_redraw = 1;
         }
     }
     return 0;                                   /* Do not block: allow normal triggering */
@@ -454,12 +468,11 @@ s32 dpl_enc(void *brain, void *ev)
 
     if (held_trig >= 0 && is_key_selection_active()) {
         if (enc == 4) {                         /* Encoder D = SAMP */
-            /* Slower, precise scrolling: 1 detent (click) = 1 sample */
+            /* 3x slower scrolling: 12 counts per sample step */
             enc_acc += delta;
             s32 step = enc_acc / ENC_COUNTS;
             enc_acc -= step * ENC_COUNTS;
             if (!step) {
-                ui_need_redraw = 1;
                 return 1;
             }
 
@@ -482,35 +495,17 @@ s32 dpl_enc(void *brain, void *ev)
                 last_sample_played[track][held_note] = (u8)cur;
             }
 
-            ui_need_redraw = 1;
             return 1;                           /* Consumed: do not modify track's base SAMP */
         }
     }
     return 0;
 }
 
-/* ---- Screen Drawing: On-screen feedback when editing key's sample ---------------- */
+/* ---- Screen Drawing (safely delegated to native stock UI widgets) ---------------- */
 void dpl_draw(void *bmp, void *ctrl)
 {
-    s32 track = (s32)fw_active_track;
-
-    if (ui_need_redraw && ctrl) {
-        *((u8 *)ctrl + 0x20) = 1;               /* Mark screen dirty to re-render */
-        ui_need_redraw = 0;
-    }
-
-    if (held_trig >= 0 && is_key_selection_active()) {
-        s32 slot = (s32)dpl_get_trig_sample(track, held_trig);
-        const char *name = dpl_sample_name(slot);
-        s32 k = held_trig + 1;
-
-        /* Box coordinates: x 2..125, y 52..62 (top of 128x64 display) */
-        fw_fillrect(bmp, 2, 52, 125, 62, 0);    /* Clear box */
-        fw_framerect(bmp, 2, 52, 125, 62, 1);   /* Draw outline */
-
-        /* Draw: "KEY <k>: <slot> <name>" with maxlen = 23 characters */
-        fw_textf(bmp, (const void *)OS_FONT5, 5, 54, 23, "KEY %d: %d %s", k, slot, name);
-    }
+    (void)bmp;
+    (void)ctrl;
 }
 
 /* ---- Periodic Tick: Clean up state if Chromatic mode is turned off --------------- */
@@ -523,7 +518,6 @@ void dpl_tick(u8 *ctrl)
             held_keys_mask = 0;
             held_note = -1;
             enc_acc = 0;
-            ui_need_redraw = 1;
         }
     }
 }
@@ -577,6 +571,8 @@ static int32_t pool_samp_fmt(char *buf, int32_t value, int32_t ctx, int32_t mach
     char *p = buf;
     (void)value;
     (void)machine;
+
+    src_tab_active = 1;
 
     if (held_trig >= 0 && is_key_selection_active()) {
         slot = (s32)dpl_get_trig_sample(track, held_trig);

@@ -98,6 +98,9 @@ static u16 held_keys_mask = 0;
 static u8  ui_need_redraw = 0;
 static u32 kb_notes[TRACKS][4];                 /* 128 bits: covers notes 0..127 */
 
+#define ENC_COUNTS 4                            /* Encoder quadrature counts per detent */
+static s32 enc_acc = 0;
+
 /* Helper: Check if keyboard/chromatic mode is active */
 static s32 is_chromatic_on(void)
 {
@@ -182,6 +185,17 @@ static void dpl_init_track(s32 t)
         last_sample_played[t][k] = s;
     }
     dpl_inited[t] = 1;
+
+    /* Fallback: if kit is loaded and sound has PLAY set to REV (1), set to FWD (0) */
+    if (fw_kit) {
+        u8 *snd = FW_SOUND(fw_kit, t);
+        if (snd && snd[S_MACHINE] == DIGIPOOLS_MACHINE) {
+            if (*(s16 *)(snd + 0x38) == (s16)(1 << 8)) {
+                *(s16 *)(snd + 0x38) = 0;
+                fw_set_param(0, t, 18);
+            }
+        }
+    }
 }
 
 /* Get sample assigned to trig key k on track t */
@@ -372,6 +386,7 @@ s32 dpl_key(void *brain, void *ev)
         if (func_held) {
             held_trig = -1;
             held_keys_mask = 0;
+            enc_acc = 0;
             ui_need_redraw = 1;
         }
         return 0;
@@ -381,6 +396,7 @@ s32 dpl_key(void *brain, void *ev)
         func_held = 1;
         held_trig = -1;
         held_keys_mask = 0;
+        enc_acc = 0;
         ui_need_redraw = 1;
         return 0;                               /* Allow FUNC+key mute/actions to pass through */
     } else {
@@ -402,8 +418,10 @@ s32 dpl_key(void *brain, void *ev)
         if (!is_key_selection_active()) {
             held_keys_mask = 0;
             held_trig = -1;
+            enc_acc = 0;
             return 0;
         }
+        enc_acc = 0;
         if (fl & 1) {                           /* Key pressed */
             held_keys_mask |= (1u << k);
             held_trig = k;
@@ -436,8 +454,17 @@ s32 dpl_enc(void *brain, void *ev)
 
     if (held_trig >= 0 && is_key_selection_active()) {
         if (enc == 4) {                         /* Encoder D = SAMP */
+            /* Slower, precise scrolling: 1 detent (click) = 1 sample */
+            enc_acc += delta;
+            s32 step = enc_acc / ENC_COUNTS;
+            enc_acc -= step * ENC_COUNTS;
+            if (!step) {
+                ui_need_redraw = 1;
+                return 1;
+            }
+
             s32 cur = (s32)dpl_get_trig_sample(track, held_trig);
-            cur += delta;
+            cur += step;
             if (cur < 1) cur = 1;
             if (cur > 127) cur = 127;
 
@@ -495,9 +522,51 @@ void dpl_tick(u8 *ctrl)
             held_trig = -1;
             held_keys_mask = 0;
             held_note = -1;
+            enc_acc = 0;
             ui_need_redraw = 1;
         }
     }
+}
+
+/* ---- Machine Switch: Initialize all SRC parameters to ONESHOT defaults ----------- */
+static void dpl_on_switch(int32_t track, int32_t from, uint8_t *sound)
+{
+    s16 samp;
+    s32 slot;
+    (void)from;
+    if (!sound || track < 0 || track >= TRACKS) return;
+
+    /* Initialize all SRC machine parameters to stock ONESHOT defaults */
+    *(s16 *)(sound + 0x36) = 0;                  /* TUNE  = 0 (0 semitones) */
+    *(s16 *)(sound + 0x38) = 0;                  /* PLAY  = 0 (FWD) */
+    *(s16 *)(sound + 0x3a) = 0;                  /* BIT   = 0 */
+
+    /* If SAMP is not already set to a valid slot (1..127), default to 1 */
+    samp = *(s16 *)(sound + 0x3c);
+    slot = (s32)(samp >> 8);
+    if (slot <= 0 || slot > 127) {
+        slot = 1;
+        *(s16 *)(sound + 0x3c) = (s16)(slot << 8);
+    }
+
+    *(s16 *)(sound + 0x3e) = 0;                  /* START = 0 */
+    *(s16 *)(sound + 0x40) = (s16)(120 << 8);    /* LEN   = 120 (max length) */
+    *(s16 *)(sound + 0x42) = 0;                  /* LOOP  = 0 */
+    *(s16 *)(sound + 0x44) = 0;                  /* BR    = 0 */
+
+    /* Push parameters to the sound engine */
+    fw_set_param(0, track, 17);                  /* TUNE */
+    fw_set_param(0, track, 18);                  /* PLAY (FWD) */
+    fw_set_param(0, track, 19);                  /* BIT */
+    fw_set_param((s32)(slot << 8), track, 20);   /* SAMP */
+    fw_set_param(0, track, 21);                  /* START */
+    fw_set_param(120 << 8, track, 22);           /* LEN */
+    fw_set_param(0, track, 23);                  /* LOOP */
+    fw_set_param(0, track, 24);                  /* BR */
+
+    /* Reset track sample mapping */
+    dpl_inited[track] = 0;
+    dpl_init_track(track);
 }
 
 /* ---- Knob D Formatter on SRC Page ------------------------------------------------ */
@@ -561,7 +630,12 @@ static int32_t pool_samp_fmt(char *buf, int32_t value, int32_t ctx, int32_t mach
 static const struct cm_ui dpl_page = {
     .abi = cm_ui_v3,
     .page_from = 0,                             /* ONESHOT's SRC page */
+    .on_switch = dpl_on_switch,
     .knob = {
+        [1] = {                                 /* Knob B: PLAY */
+            .flags = CM_DEFAULT,
+            .def = 0,                           /* 0 = FWD */
+        },
         [3] = {                                 /* Knob D: SAMP */
             .fmt = pool_samp_fmt,
         },

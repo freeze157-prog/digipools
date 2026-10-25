@@ -13,20 +13,20 @@
 ## Features
 
 - **New Machine: DIGIPOOLS (ID 10)**
-  - Accessible via `FUNC + SRC` (displayed as `DIGIPOOLS`, short title `POOL`).
-  - Utilizes the stock ONESHOT parameter architecture (TUNE, PLAY, BIT REDUCTION, SAMP, START, LEN, LOOP, LEV).
-  - Uses the stock high-fidelity sample playback engine with filters, overdrive, envelopes, LFOs, and FX sends.
+  - Accessible via the Machine menu (double-click `SRC` or `FUNC + SRC`), displayed as `DIGIPOOLS` (short title `POOL`).
+  - Initializes cleanly with standard **ONESHOT** defaults: **Forward (`FWD`)** playback mode, center tuning, full sample length, and neutral envelope/filter settings.
+  - Utilizes the stock high-fidelity sample playback engine with filters, overdrive, envelopes, LFOs, and FX sends.
 - **Chromatic Mode Multi-Sample Playback**
   - In Chromatic mode (`KEYBOARD` / `FUNC + TRK`), each trig key (or chromatic note) triggers a different sample from the RAM sample pool.
   - Natural octave pitch is preserved when shifting octaves UP/DOWN.
-- **Instant Key-to-Sample Selection with Name Display & Preview**
+- **Instant Key-to-Sample Selection with Name Display & On-Demand Preview**
   - To assign which key plays which sample:
     1. Enter **Chromatic mode** (`FUNC + TRK`).
     2. Ensure you are **not** in step editing / grid record mode (`[REC]` is off).
     3. Open the **SRC** page.
     4. **Hold down any trig key** (1-16) *(without holding FUNC)*.
-    5. Turn **Encoder D (SAMP)** to select the desired sample from the pool.
-    6. Press **`[YES]`** while holding the trig key to audition/preview the selected sample.
+    5. Turn **Encoder D (SAMP)** to select the desired sample by name (scrolling is calibrated at 1 click = 1 sample, without any audio interruption or auto-preview spam).
+    6. Press **`[YES]`** while holding the trig key to audition/preview the selected sample on demand, or simply tap the trig key in Chromatic mode.
     7. Release the key.
   - **Sample Name Display**:
     - The top OLED banner displays: `KEY <key>: <slot> <Sample Name>` (e.g., `KEY 1: 4 808 CLAP`).

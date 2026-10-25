@@ -19,15 +19,14 @@
 - **Chromatic Mode Multi-Sample Playback**
   - In Chromatic mode (`KEYBOARD` / `FUNC + TRK`), each trig key (or chromatic note) triggers a different sample from the RAM sample pool.
   - Natural octave pitch is preserved when shifting octaves UP/DOWN.
-- **Instant Key-to-Sample Selection with Name Display & On-Demand Preview**
+- **Instant Key-to-Sample Selection with Name Display**
   - To assign which key plays which sample:
     1. Enter **Chromatic mode** (`FUNC + TRK`).
     2. Ensure you are **not** in step editing / grid record mode (`[REC]` is off).
     3. Open the **SRC** page.
     4. **Hold down any trig key** (1-16) *(without holding FUNC)*.
-    5. Turn **Encoder D (SAMP)** to select the desired sample by name (scrolling is calibrated at 1 click = 1 sample, without any audio interruption or auto-preview spam).
-    6. Press **`[YES]`** while holding the trig key to audition/preview the selected sample on demand, or simply tap the trig key in Chromatic mode.
-    7. Release the key.
+    5. Turn **Encoder D (SAMP)** to select the desired sample by name.
+    6. Release the key, and tap the trig key in Chromatic mode to audition/play the selected sample.
   - **Sample Name Display**:
     - The top OLED banner displays: `KEY <key>: <slot> <Sample Name>` (e.g., `KEY 1: 4 808 CLAP`).
     - Knob D pop-up shows `K<key>:<slot> <Sample Name>`.

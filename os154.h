@@ -32,6 +32,5 @@
 #define OS_IS_REC       0x4009359c   /* (seq) -> step edit / grid record active */
 #define OS_SMP_NAME     0x400eb972   /* (slot) -> const char * name */
 #define OS_POST_MSG     0x40093ab0   /* (seq, fmt, ...) -> shows on-screen toast notification */
-#define K_YES           25           /* [YES] button */
 
 #endif

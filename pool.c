@@ -109,6 +109,16 @@ static s32 is_chromatic_on(void)
     return (KB_ON(ts) & 0xff) != 0;
 }
 
+/* Helper: Check if step editing (grid record mode) is active */
+static s32 is_step_edit_on(void)
+{
+    fn0_t get_seq = (fn0_t)OS_SEQ_GET;
+    fn1_t is_rec = (fn1_t)OS_IS_REC;
+    u32 seq = get_seq();
+    if (!seq) return 0;
+    return (is_rec(seq) & 0xff) != 0;
+}
+
 /* Helper: Get sound data for track t if it is on DIGIPOOLS machine */
 static const u8 *dpl_sound(s32 t)
 {
@@ -126,6 +136,28 @@ static const u8 *dpl_sound(s32 t)
 static s32 is_digipools_active(void)
 {
     return dpl_sound((s32)fw_active_track) != 0;
+}
+
+/* Helper: Key selection for DigiPools is ONLY active when:
+ * 1. Chromatic mode is ON
+ * 2. Step edit / grid record mode is OFF
+ * 3. Active track is DigiPools
+ */
+static s32 is_key_selection_active(void)
+{
+    return is_chromatic_on() && !is_step_edit_on() && is_digipools_active();
+}
+
+/* Helper: Resolve sample name from the project RAM sample pool */
+static const char *dpl_sample_name(s32 slot)
+{
+    const char *name;
+    if (slot <= 0 || slot > 127)
+        return "OFF";
+    name = ((const char *(*)(s32))OS_SMP_NAME)(slot);
+    if (name && name[0])
+        return name;
+    return "---";
 }
 
 /* Initialize default sample mapping for track t (key k -> sample k+1) */
@@ -188,6 +220,19 @@ static s32 kb_was_recorded(const u8 *msg, s32 track, s32 note)
         && dpl_sound(track) != 0;
 }
 
+/* Preview state */
+static s32 preview_sample = 0;
+
+static void dpl_preview(s32 track, s32 samp)
+{
+    typedef void (*noteon_fn)(s32 trk, s32 note, s32 vel, s32 src, s32 dur, s32 l1, s32 l2);
+    noteon_fn note_on = (noteon_fn)OS_NOTEON;
+    if (samp <= 0 || samp > 127) return;
+    preview_sample = samp;
+    note_on(track, 60, 100, SRC_KEYS, 0, -1, -1);
+    preview_sample = 0;
+}
+
 /* ---- NOTEON Intercept (called from glue.s dpl_kbnote) ---------------------------- */
 void dpl_kb_noteon(s32 track, s32 note, u8 *fp, u32 audio_a, u32 audio_b)
 {
@@ -195,33 +240,44 @@ void dpl_kb_noteon(s32 track, s32 note, u8 *fp, u32 audio_a, u32 audio_b)
     s32 key;
     const u8 *snd;
     s32 samp;
+    s32 is_preview = (preview_sample > 0);
 
     if (*(s32 *)(fp + 20) != SRC_KEYS || note < 0 || note > 127 || track < 0 || track >= TRACKS)
         return;
 
-    key = (*(u32 *)(fp + 4) == KB_CALL);
-    kb_note_track(track, note, key);
+    key = (*(u32 *)(fp + 4) == KB_CALL) || is_preview;
+    if (!is_preview)
+        kb_note_track(track, note, key);
 
     if (!key || PREVIEW <= 63 || *(u32 *)(fp - 8) || !((audio_a | audio_b) & 0xff))
         return;
 
     snd = dpl_sound(track);
-    if (!snd || !is_chromatic_on())
+    if (!snd)
         return;
 
-    /* Remember current held note */
-    held_note = note;
+    if (!is_preview && !is_chromatic_on())
+        return;
 
-    /* Look up sample for this trig / note */
-    if (held_trig >= 0 && held_trig < 16)
-        samp = dpl_get_trig_sample(track, held_trig);
-    else
-        samp = dpl_get_note_sample(track, note);
+    if (is_preview) {
+        samp = preview_sample;
+    } else {
+        /* Remember current held note */
+        held_note = note;
+
+        /* Look up sample for this trig / note */
+        if (held_trig >= 0 && held_trig < 16)
+            samp = dpl_get_trig_sample(track, held_trig);
+        else
+            samp = dpl_get_note_sample(track, note);
+
+        if (samp <= 0) samp = 1;
+
+        /* Remember exact sample played for this note so recording uses the identical sample */
+        last_sample_played[track][note] = (u8)samp;
+    }
 
     if (samp <= 0) samp = 1;
-
-    /* Remember exact sample played for this note so recording uses the identical sample */
-    last_sample_played[track][note] = (u8)samp;
 
     /* Allocate voice lock list with 1 lock: slot 20 (SAMP).
      * We preserve natural note pitch and octave up/down so live playing sounds
@@ -301,13 +357,27 @@ s32 dpl_key(void *brain, void *ev)
     s32 fl = *(const s32 *)((const u8 *)ev + 16);
     (void)brain;
 
+    /* [YES] auditions/previews the currently selected sample */
+    if (key == K_YES && (fl & 1)) {
+        if (held_trig >= 0 && is_key_selection_active()) {
+            s32 track = (s32)fw_active_track;
+            s32 samp = dpl_get_trig_sample(track, held_trig);
+            dpl_preview(track, samp);
+            return 1;                           /* Consumed */
+        }
+    }
+
     if (key >= K_TRIG1 && key < K_TRIG1 + 16) {
         s32 k = key - K_TRIG1;
+        if (!is_key_selection_active()) {
+            held_keys_mask = 0;
+            held_trig = -1;
+            return 0;
+        }
         if (fl & 1) {                           /* Key pressed */
             held_keys_mask |= (1u << k);
             held_trig = k;
-            if (is_chromatic_on() && is_digipools_active())
-                ui_need_redraw = 1;
+            ui_need_redraw = 1;
         } else {                                /* Key released */
             held_keys_mask &= ~(1u << k);
             if (held_trig == k) {
@@ -320,8 +390,7 @@ s32 dpl_key(void *brain, void *ev)
                     }
                 }
             }
-            if (is_chromatic_on() && is_digipools_active())
-                ui_need_redraw = 1;
+            ui_need_redraw = 1;
         }
     }
     return 0;                                   /* Do not block: allow normal triggering */
@@ -335,7 +404,7 @@ s32 dpl_enc(void *brain, void *ev)
     s32 track = (s32)fw_active_track;
     (void)brain;
 
-    if (held_trig >= 0 && is_chromatic_on() && dpl_sound(track)) {
+    if (held_trig >= 0 && is_key_selection_active()) {
         if (enc == 4) {                         /* Encoder D = SAMP */
             s32 cur = (s32)dpl_get_trig_sample(track, held_trig);
             cur += delta;
@@ -356,6 +425,9 @@ s32 dpl_enc(void *brain, void *ev)
                 last_sample_played[track][held_note] = (u8)cur;
             }
 
+            /* Preview/audition the newly selected sample */
+            dpl_preview(track, cur);
+
             ui_need_redraw = 1;
             return 1;                           /* Consumed: do not modify track's base SAMP */
         }
@@ -373,33 +445,17 @@ void dpl_draw(void *bmp, void *ctrl)
         ui_need_redraw = 0;
     }
 
-    if (held_trig >= 0 && is_chromatic_on() && dpl_sound(track)) {
+    if (held_trig >= 0 && is_key_selection_active()) {
         s32 slot = (s32)dpl_get_trig_sample(track, held_trig);
-        char msg[24];
-        char *p = msg;
-        s32 v = held_trig + 1;
+        const char *name = dpl_sample_name(slot);
+        s32 k = held_trig + 1;
 
-        /* Box coordinates: x 14..114, y 52..62 (top of 128x64 display) */
-        fw_fillrect(bmp, 14, 52, 114, 62, 0);   /* Clear box */
-        fw_framerect(bmp, 14, 52, 114, 62, 1);  /* Draw outline */
+        /* Box coordinates: x 2..125, y 52..62 (top of 128x64 display) */
+        fw_fillrect(bmp, 2, 52, 125, 62, 0);    /* Clear box */
+        fw_framerect(bmp, 2, 52, 125, 62, 1);   /* Draw outline */
 
-        /* Format "KEY X -> SMP Y" without standard sprintf */
-        *p++ = 'K'; *p++ = 'E'; *p++ = 'Y'; *p++ = ' ';
-        if (v >= 10) *p++ = (char)('0' + v / 10);
-        *p++ = (char)('0' + (v % 10));
-        *p++ = ' '; *p++ = '-'; *p++ = '>'; *p++ = ' ';
-        *p++ = 'S'; *p++ = 'M'; *p++ = 'P'; *p++ = ' ';
-        if (slot >= 100) {
-            *p++ = (char)('0' + slot / 100);
-            slot %= 100;
-            *p++ = (char)('0' + slot / 10);
-        } else if (slot >= 10) {
-            *p++ = (char)('0' + slot / 10);
-        }
-        *p++ = (char)('0' + (slot % 10));
-        *p = 0;
-
-        fw_textf(bmp, (const void *)OS_FONT5, 20, 54, 20, msg);
+        /* Draw: "KEY <k>: <slot> <name>" with maxlen = 23 characters */
+        fw_textf(bmp, (const void *)OS_FONT5, 5, 54, 23, "KEY %d: %d %s", k, slot, name);
     }
 }
 
@@ -407,7 +463,7 @@ void dpl_draw(void *bmp, void *ctrl)
 void dpl_tick(u8 *ctrl)
 {
     (void)ctrl;
-    if (!is_chromatic_on()) {
+    if (!is_key_selection_active()) {
         if (held_trig >= 0 || held_keys_mask != 0) {
             held_trig = -1;
             held_keys_mask = 0;
@@ -426,7 +482,7 @@ static int32_t pool_samp_fmt(char *buf, int32_t value, int32_t ctx, int32_t mach
     (void)value;
     (void)machine;
 
-    if (held_trig >= 0 && is_chromatic_on() && dpl_sound(track)) {
+    if (held_trig >= 0 && is_key_selection_active()) {
         slot = (s32)dpl_get_trig_sample(track, held_trig);
         k = held_trig + 1;
 
@@ -447,12 +503,12 @@ static int32_t pool_samp_fmt(char *buf, int32_t value, int32_t ctx, int32_t mach
             *p = 0;
             return 1;
         } else {
-            /* Pop-up label: "KEY <key>: SMP <slot>" */
-            *p++ = 'K'; *p++ = 'E'; *p++ = 'Y'; *p++ = ' ';
+            /* Pop-up label: "K<key>:<slot> <name>" (max 15 chars for pop[16]) */
+            const char *name = dpl_sample_name(slot);
+            *p++ = 'K';
             if (k >= 10) *p++ = (char)('0' + k / 10);
             *p++ = (char)('0' + (k % 10));
-            *p++ = ':'; *p++ = ' ';
-            *p++ = 'S'; *p++ = 'M'; *p++ = 'P'; *p++ = ' ';
+            *p++ = ':';
             if (slot >= 100) {
                 *p++ = (char)('0' + slot / 100);
                 slot %= 100;
@@ -461,6 +517,10 @@ static int32_t pool_samp_fmt(char *buf, int32_t value, int32_t ctx, int32_t mach
                 *p++ = (char)('0' + slot / 10);
             }
             *p++ = (char)('0' + (slot % 10));
+            *p++ = ' ';
+            while (*name && p < buf + 15) {
+                *p++ = *name++;
+            }
             *p = 0;
             return 1;
         }

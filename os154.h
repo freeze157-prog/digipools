@@ -28,5 +28,9 @@
 #define OS_PREVIEW      0x4020c64c   /* the preview step, <= 63 when one */
 #define OS_KB_CALL      0x40028bb4   /* NOTEON's return in the keyboard's call */
 #define OS_OP_NEW       0x400d43a8   /* operator new(size) */
+#define OS_SEQ_GET      0x40138928   /* () -> sequencer object */
+#define OS_IS_REC       0x4009359c   /* (seq) -> step edit / grid record active */
+#define OS_SMP_NAME     0x400eb972   /* (slot) -> const char * name */
+#define K_YES           25           /* [YES] button */
 
 #endif
